@@ -103,6 +103,23 @@ sudo ./scripts/vless-reality deploy
 - `REALITY_SHORT_ID`：可留空，部署时自动生成
 - `XRAY_LOGLEVEL`：默认 `warning`
 
+## 修改配置
+
+正常修改方式：
+
+1. 编辑 `.env.local`
+2. 执行 `sudo ./scripts/vless-reality deploy`
+3. 如有需要，再执行 `./scripts/vless-reality show-client` 导出最新客户端配置
+
+说明：
+
+- 日常改配置只需要改 `.env.local`，不要直接长期手改 `/usr/local/etc/xray/config.json`。
+- `deploy` 会重新渲染服务端配置和客户端配置，并自动重启 `xray`。
+- 如果新配置启动失败，脚本会自动回滚到上一个可用配置。
+- `generated/client.vless.txt` 和 `generated/client.mihomo.yaml` 都是生成产物，下次 `deploy` 会被覆盖。
+- `state/runtime.env` 会保存自动生成的 `UUID`、密钥和 `shortId`；只改 `SERVER_ADDRESS`、`REALITY_DEST`、`REALITY_SERVER_NAME`、`XRAY_LOGLEVEL` 这类字段时，一般不用动它。
+- 如果你想换一整套新的 `UUID` / `REALITY` 密钥，可在 `.env.local` 手动填写新值，或删除 `state/runtime.env` 后重新 `deploy` 让脚本自动生成。
+
 ## 验证
 
 如果你要手工复查，可再执行：
