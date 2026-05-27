@@ -458,6 +458,17 @@ show_client() {
   [[ -f "$GENERATED_DIR/client.vless.txt" ]] || die "generated/client.vless.txt not found, run deploy first"
   [[ -f "$GENERATED_DIR/client.mihomo.yaml" ]] || die "generated/client.mihomo.yaml not found, run deploy first"
 
+  log "files:"
+  log "- vless: $GENERATED_DIR/client.vless.txt"
+  log "- mihomo: $GENERATED_DIR/client.mihomo.yaml"
+  echo
+
+  log "import tips:"
+  log "- iOS (Shadowrocket): copy the vless link below or open client.vless.txt on your phone"
+  log "- Windows (Mihomo/Clash.Meta): copy the mihomo yaml below into a local .yaml file, then import it"
+  log "- macOS/Linux: import client.mihomo.yaml directly, or copy it locally with scp/sftp"
+  echo
+
   log "vless:"
   cat "$GENERATED_DIR/client.vless.txt"
   echo

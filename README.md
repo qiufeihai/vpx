@@ -84,6 +84,12 @@ sudo ./scripts/xray-selfhost deploy
 - `generated/client.mihomo.yaml` 用于 `Mihomo / Clash.Meta`。
 - `state/runtime.env` 保存自动生成的 `UUID`、密钥和 `shortId`。
 
+导入建议：
+
+- iOS：执行 `./scripts/xray-selfhost show-client`，复制 `vless://` 链接导入 `Shadowrocket`。
+- Windows：执行 `./scripts/xray-selfhost show-client`，把 `mihomo:` 段落保存为本地 `client.mihomo.yaml` 后导入客户端。
+- macOS / Linux：可直接使用 `generated/client.mihomo.yaml`，也可先复制到本地后再导入。
+
 ## 配置字段
 
 - `SERVER_ADDRESS`：服务器公网 IP 或域名
@@ -110,7 +116,8 @@ sudo ss -lntp | grep ':443'
 客户端导入验证：
 
 - iOS：导入 `generated/client.vless.txt`
-- macOS / Windows：导入 `generated/client.mihomo.yaml`
+- Windows：将 `show-client` 输出的 `mihomo` 内容保存为本地 `.yaml` 后导入
+- macOS / Linux：导入 `generated/client.mihomo.yaml`
 
 ## 生产注意事项
 
