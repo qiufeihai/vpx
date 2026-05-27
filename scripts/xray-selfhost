@@ -237,8 +237,8 @@ generate_keys_if_missing() {
   local output
   output="$("$(xray_bin)" x25519)"
 
-  REALITY_PRIVATE_KEY="$(printf '%s\n' "$output" | awk -F ': ' '/Private key/ {print $2}')"
-  REALITY_PUBLIC_KEY="$(printf '%s\n' "$output" | awk -F ': ' '/Public key|Password/ {print $2; exit}')"
+  REALITY_PRIVATE_KEY="$(printf '%s\n' "$output" | awk -F ': ' '/^Private[Kk]ey|^Private key/ {print $2; exit}')"
+  REALITY_PUBLIC_KEY="$(printf '%s\n' "$output" | awk -F ': ' '/^Public[Kk]ey|^Public key|^Password \(PublicKey\)|^Password/ {print $2; exit}')"
 
   [[ -n "$REALITY_PRIVATE_KEY" && -n "$REALITY_PUBLIC_KEY" ]] || die "failed to generate reality keys"
 
@@ -271,17 +271,49 @@ backup_current_config() {
   printf '%s\n' "$backup_path"
 }
 
+get_xray_service_user() {
+  local service_user=""
+
+  service_user="$(systemctl show -p User --value xray 2>/dev/null || true)"
+
+  if [[ -z "$service_user" && -f /etc/systemd/system/xray.service ]]; then
+    service_user="$(awk -F '=' '/^[[:space:]]*User[[:space:]]*=/ {print $2}' /etc/systemd/system/xray.service | tail -n 1 | xargs)"
+  fi
+
+  [[ -n "$service_user" ]] || service_user="root"
+  printf '%s\n' "$service_user"
+}
+
+install_runtime_config() {
+  local src="$1"
+  local service_user service_group
+
+  service_user="$(get_xray_service_user)"
+
+  if [[ "$service_user" == "root" ]]; then
+    install -m 600 -o root -g root "$src" "$XRAY_CONFIG_FILE"
+    return 0
+  fi
+
+  service_group="$(id -gn "$service_user" 2>/dev/null || printf '%s\n' "$service_user")"
+  install -m 640 -o root -g "$service_group" "$src" "$XRAY_CONFIG_FILE"
+}
+
 restart_with_rollback() {
   local backup_path="$1"
 
-  if systemctl restart xray && systemctl is-active --quiet xray; then
+  if systemctl restart xray; then
+    sleep 1
+  fi
+
+  if systemctl is-active --quiet xray; then
     return 0
   fi
 
   warn "new config failed after restart, rolling back to previous config"
 
   if [[ -n "$backup_path" && -f "$backup_path" ]]; then
-    install -m 600 "$backup_path" "$XRAY_CONFIG_FILE"
+    install_runtime_config "$backup_path"
     systemctl restart xray >/dev/null 2>&1 || true
     die "deploy failed, previous config restored from $backup_path"
   fi
@@ -380,7 +412,7 @@ deploy_xray() {
   "$(xray_bin)" run -test -config "$STATE_DIR/config.server.json"
   local backup_path
   backup_path="$(backup_current_config)"
-  install -m 600 "$STATE_DIR/config.server.json" "$XRAY_CONFIG_FILE"
+  install_runtime_config "$STATE_DIR/config.server.json"
 
   systemctl enable xray >/dev/null 2>&1 || true
   restart_with_rollback "$backup_path"

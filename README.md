@@ -58,6 +58,7 @@ sudo ./scripts/xray-selfhost deploy
 
 - 部署前会预检查 `REALITY_DEST` 与 `REALITY_SERVER_NAME` 是否可连通且证书匹配。
 - 部署时会先备份现有 `/usr/local/etc/xray/config.json`。
+- 部署时会按 `xray.service` 的运行用户设置配置文件权限，避免服务进程读不到 `config.json`。
 - 新配置重启失败时会自动回滚到上一个配置。
 - 部署成功后会直接输出服务状态、`443` 监听和当前拥塞控制信息。
 
