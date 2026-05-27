@@ -1,5 +1,5 @@
 proxies:
-  - name: xray-selfhost
+  - name: vless-reality
     type: vless
     server: __SERVER_ADDRESS__
     port: __SERVER_PORT__
@@ -18,7 +18,7 @@ proxy-groups:
   - name: PROXY
     type: select
     proxies:
-      - xray-selfhost
+      - vless-reality
 
 rules:
   - MATCH,PROXY

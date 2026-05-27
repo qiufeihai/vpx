@@ -12,7 +12,7 @@ RUNTIME_ENV="$STATE_DIR/runtime.env"
 
 XRAY_CONFIG_DIR="/usr/local/etc/xray"
 XRAY_CONFIG_FILE="$XRAY_CONFIG_DIR/config.json"
-SYSCTL_FILE="/etc/sysctl.d/99-xray-selfhost.conf"
+SYSCTL_FILE="/etc/sysctl.d/99-vless-reality.conf"
 INSTALL_SCRIPT_URL="https://github.com/XTLS/Xray-install/raw/main/install-release.sh"
 
 OS_ID=""
@@ -21,11 +21,11 @@ PACKAGE_MANAGER=""
 usage() {
   cat <<'EOF'
 Usage:
-  ./scripts/xray-selfhost install
-  ./scripts/xray-selfhost deploy
-  ./scripts/xray-selfhost restart
-  ./scripts/xray-selfhost status
-  ./scripts/xray-selfhost show-client
+  ./scripts/vless-reality install
+  ./scripts/vless-reality deploy
+  ./scripts/vless-reality restart
+  ./scripts/vless-reality status
+  ./scripts/vless-reality show-client
 EOF
 }
 

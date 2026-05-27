@@ -49,9 +49,9 @@ cp .env.example .env.local
 - `REALITY_SERVER_NAME`
 
 ```bash
-sudo ./scripts/xray-selfhost install
-sudo ./scripts/xray-selfhost deploy
-./scripts/xray-selfhost show-client
+sudo ./scripts/vless-reality install
+sudo ./scripts/vless-reality deploy
+./scripts/vless-reality show-client
 ```
 
 部署特性：
@@ -65,11 +65,11 @@ sudo ./scripts/xray-selfhost deploy
 ## 命令
 
 ```bash
-./scripts/xray-selfhost install
-./scripts/xray-selfhost deploy
-./scripts/xray-selfhost restart
-./scripts/xray-selfhost status
-./scripts/xray-selfhost show-client
+./scripts/vless-reality install
+./scripts/vless-reality deploy
+./scripts/vless-reality restart
+./scripts/vless-reality status
+./scripts/vless-reality show-client
 ```
 
 ## 产物
@@ -86,8 +86,8 @@ sudo ./scripts/xray-selfhost deploy
 
 导入建议：
 
-- iOS：执行 `./scripts/xray-selfhost show-client`，复制 `vless://` 链接导入 `Shadowrocket`。
-- Windows：执行 `./scripts/xray-selfhost show-client`，把 `mihomo:` 段落保存为本地 `client.mihomo.yaml` 后导入客户端。
+- iOS：执行 `./scripts/vless-reality show-client`，复制 `vless://` 链接导入 `Shadowrocket`。
+- Windows：执行 `./scripts/vless-reality show-client`，把 `mihomo:` 段落保存为本地 `client.mihomo.yaml` 后导入客户端。
 - macOS / Linux：可直接使用 `generated/client.mihomo.yaml`，也可先复制到本地后再导入。
 
 ## 配置字段
@@ -108,7 +108,7 @@ sudo ./scripts/xray-selfhost deploy
 如果你要手工复查，可再执行：
 
 ```bash
-sudo ./scripts/xray-selfhost status
+sudo ./scripts/vless-reality status
 sudo systemctl status xray --no-pager
 sudo ss -lntp | grep ':443'
 ```
