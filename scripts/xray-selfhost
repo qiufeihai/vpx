@@ -1,0 +1,453 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+ROOT_DIR="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+STATE_DIR="$ROOT_DIR/state"
+GENERATED_DIR="$ROOT_DIR/generated"
+BACKUP_DIR="$STATE_DIR/backups"
+TEMPLATE_DIR="$ROOT_DIR/templates"
+ENV_FILE="$ROOT_DIR/.env.local"
+RUNTIME_ENV="$STATE_DIR/runtime.env"
+
+XRAY_CONFIG_DIR="/usr/local/etc/xray"
+XRAY_CONFIG_FILE="$XRAY_CONFIG_DIR/config.json"
+SYSCTL_FILE="/etc/sysctl.d/99-xray-selfhost.conf"
+INSTALL_SCRIPT_URL="https://github.com/XTLS/Xray-install/raw/main/install-release.sh"
+
+OS_ID=""
+PACKAGE_MANAGER=""
+
+usage() {
+  cat <<'EOF'
+Usage:
+  ./scripts/xray-selfhost install
+  ./scripts/xray-selfhost deploy
+  ./scripts/xray-selfhost restart
+  ./scripts/xray-selfhost status
+  ./scripts/xray-selfhost show-client
+EOF
+}
+
+log() {
+  printf '%s\n' "$*"
+}
+
+warn() {
+  printf 'warning: %s\n' "$*" >&2
+}
+
+die() {
+  printf 'error: %s\n' "$*" >&2
+  exit 1
+}
+
+require_root() {
+  if [[ "$(id -u)" -ne 0 ]]; then
+    die "this command must run as root"
+  fi
+}
+
+ensure_dirs() {
+  mkdir -p "$STATE_DIR" "$GENERATED_DIR" "$BACKUP_DIR"
+}
+
+detect_os() {
+  [[ -r /etc/os-release ]] || die "/etc/os-release not found"
+  # shellcheck disable=SC1091
+  . /etc/os-release
+  OS_ID="${ID:-}"
+
+  case "${ID:-}" in
+    ubuntu)
+      PACKAGE_MANAGER="apt"
+      ;;
+    rocky)
+      PACKAGE_MANAGER="dnf"
+      ;;
+    *)
+      die "unsupported system: ${ID:-unknown}"
+      ;;
+  esac
+}
+
+install_packages() {
+  detect_os
+
+  if [[ "$PACKAGE_MANAGER" == "apt" ]]; then
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update
+    apt-get install -y curl openssl ca-certificates iproute2 procps
+  else
+    dnf install -y curl openssl ca-certificates iproute procps-ng
+  fi
+}
+
+apply_sysctl_tuning() {
+  local temp_file backup_file=""
+  temp_file="$(mktemp)"
+
+  if sysctl net.core.default_qdisc >/dev/null 2>&1; then
+    printf '%s\n' 'net.core.default_qdisc=fq' >>"$temp_file"
+  else
+    warn "skip fq tuning: net.core.default_qdisc not available"
+  fi
+
+  if sysctl net.ipv4.tcp_available_congestion_control 2>/dev/null | grep -qw bbr; then
+    printf '%s\n' 'net.ipv4.tcp_congestion_control=bbr' >>"$temp_file"
+  else
+    warn "skip bbr tuning: bbr not available on this kernel"
+  fi
+
+  if [[ ! -s "$temp_file" ]]; then
+    rm -f "$temp_file"
+    warn "skip sysctl tuning: no supported settings detected"
+    return 0
+  fi
+
+  if [[ -f "$SYSCTL_FILE" ]]; then
+    backup_file="$(mktemp)"
+    cp "$SYSCTL_FILE" "$backup_file"
+  fi
+
+  cp "$temp_file" "$SYSCTL_FILE"
+  rm -f "$temp_file"
+
+  if ! sysctl -p "$SYSCTL_FILE" >/dev/null 2>&1; then
+    warn "failed to apply sysctl tuning, restoring previous sysctl file"
+    if [[ -n "$backup_file" && -f "$backup_file" ]]; then
+      cp "$backup_file" "$SYSCTL_FILE"
+      sysctl -p "$SYSCTL_FILE" >/dev/null 2>&1 || true
+    else
+      rm -f "$SYSCTL_FILE"
+    fi
+  fi
+
+  [[ -n "$backup_file" ]] && rm -f "$backup_file"
+}
+
+load_env_file() {
+  local file="$1"
+  [[ -f "$file" ]] || return 0
+  set -a
+  # shellcheck disable=SC1090
+  . "$file"
+  set +a
+}
+
+load_runtime_if_empty() {
+  local key value
+  [[ -f "$RUNTIME_ENV" ]] || return 0
+
+  while IFS='=' read -r key value; do
+    [[ -n "$key" ]] || continue
+    value="${value%\"}"
+    value="${value#\"}"
+    if [[ -z "${!key:-}" ]]; then
+      printf -v "$key" '%s' "$value"
+      export "$key"
+    fi
+  done <"$RUNTIME_ENV"
+}
+
+load_config() {
+  [[ -f "$ENV_FILE" ]] || die ".env.local not found, copy from .env.example first"
+
+  load_env_file "$ENV_FILE"
+  load_runtime_if_empty
+
+  export SERVER_PORT="${SERVER_PORT:-443}"
+  export CLIENT_FINGERPRINT="${CLIENT_FINGERPRINT:-chrome}"
+  export XRAY_LOGLEVEL="${XRAY_LOGLEVEL:-warning}"
+}
+
+require_env() {
+  local key
+  for key in "$@"; do
+    [[ -n "${!key:-}" ]] || die "$key is required"
+  done
+}
+
+validate_config_inputs() {
+  require_env SERVER_ADDRESS REALITY_DEST REALITY_SERVER_NAME
+
+  [[ "$REALITY_DEST" == *:* ]] || die "REALITY_DEST must look like host:port"
+  [[ "$SERVER_PORT" =~ ^[0-9]+$ ]] || die "SERVER_PORT must be numeric"
+
+  local reality_port="${REALITY_DEST##*:}"
+  [[ "$reality_port" =~ ^[0-9]+$ ]] || die "REALITY_DEST port must be numeric"
+}
+
+check_reality_target() {
+  local cert_dump leaf_cert
+
+  cert_dump="$(mktemp)"
+  leaf_cert="$(mktemp)"
+
+  if ! timeout 15s openssl s_client -connect "$REALITY_DEST" -servername "$REALITY_SERVER_NAME" </dev/null >"$cert_dump" 2>/dev/null; then
+    rm -f "$cert_dump"
+    rm -f "$leaf_cert"
+    die "REALITY target check failed: cannot connect to $REALITY_DEST with SNI $REALITY_SERVER_NAME"
+  fi
+
+  sed -n '/-----BEGIN CERTIFICATE-----/,/-----END CERTIFICATE-----/p' "$cert_dump" >"$leaf_cert"
+
+  if [[ ! -s "$leaf_cert" ]]; then
+    rm -f "$cert_dump"
+    rm -f "$leaf_cert"
+    die "REALITY target check failed: could not extract certificate from $REALITY_DEST"
+  fi
+
+  if ! openssl x509 -noout -checkhost "$REALITY_SERVER_NAME" -in "$leaf_cert" >/dev/null 2>&1; then
+    rm -f "$cert_dump"
+    rm -f "$leaf_cert"
+    die "REALITY target check failed: certificate does not match $REALITY_SERVER_NAME"
+  fi
+
+  rm -f "$cert_dump"
+  rm -f "$leaf_cert"
+}
+
+require_xray() {
+  command -v xray >/dev/null 2>&1 || [[ -x /usr/local/bin/xray ]] || die "xray is not installed, run install first"
+}
+
+xray_bin() {
+  if command -v xray >/dev/null 2>&1; then
+    command -v xray
+  else
+    printf '%s\n' /usr/local/bin/xray
+  fi
+}
+
+generate_uuid_if_missing() {
+  [[ -n "${UUID:-}" ]] && return 0
+
+  if [[ -x "$(xray_bin)" ]]; then
+    UUID="$("$(xray_bin)" uuid)"
+  else
+    UUID="$(cat /proc/sys/kernel/random/uuid)"
+  fi
+  export UUID
+}
+
+generate_keys_if_missing() {
+  [[ -n "${REALITY_PRIVATE_KEY:-}" && -n "${REALITY_PUBLIC_KEY:-}" ]] && return 0
+
+  local output
+  output="$("$(xray_bin)" x25519)"
+
+  REALITY_PRIVATE_KEY="$(printf '%s\n' "$output" | awk -F ': ' '/Private key/ {print $2}')"
+  REALITY_PUBLIC_KEY="$(printf '%s\n' "$output" | awk -F ': ' '/Public key|Password/ {print $2; exit}')"
+
+  [[ -n "$REALITY_PRIVATE_KEY" && -n "$REALITY_PUBLIC_KEY" ]] || die "failed to generate reality keys"
+
+  export REALITY_PRIVATE_KEY REALITY_PUBLIC_KEY
+}
+
+generate_short_id_if_missing() {
+  [[ -n "${REALITY_SHORT_ID:-}" ]] && return 0
+  REALITY_SHORT_ID="$(openssl rand -hex 8)"
+  export REALITY_SHORT_ID
+}
+
+save_runtime_env() {
+  cat >"$RUNTIME_ENV" <<EOF
+UUID="$UUID"
+REALITY_PRIVATE_KEY="$REALITY_PRIVATE_KEY"
+REALITY_PUBLIC_KEY="$REALITY_PUBLIC_KEY"
+REALITY_SHORT_ID="$REALITY_SHORT_ID"
+EOF
+}
+
+backup_current_config() {
+  local backup_path=""
+
+  if [[ -f "$XRAY_CONFIG_FILE" ]]; then
+    backup_path="$BACKUP_DIR/config.json.$(date +%Y%m%d-%H%M%S).bak"
+    cp "$XRAY_CONFIG_FILE" "$backup_path"
+  fi
+
+  printf '%s\n' "$backup_path"
+}
+
+restart_with_rollback() {
+  local backup_path="$1"
+
+  if systemctl restart xray && systemctl is-active --quiet xray; then
+    return 0
+  fi
+
+  warn "new config failed after restart, rolling back to previous config"
+
+  if [[ -n "$backup_path" && -f "$backup_path" ]]; then
+    install -m 600 "$backup_path" "$XRAY_CONFIG_FILE"
+    systemctl restart xray >/dev/null 2>&1 || true
+    die "deploy failed, previous config restored from $backup_path"
+  fi
+
+  die "deploy failed and no previous config backup exists"
+}
+
+print_deploy_health() {
+  log "health:"
+
+  if systemctl is-active --quiet xray; then
+    log "- service: active"
+  else
+    log "- service: inactive"
+  fi
+
+  if command -v ss >/dev/null 2>&1 && ss -lntp 2>/dev/null | grep -q ':443'; then
+    log "- port 443: listening"
+  else
+    log "- port 443: not listening"
+  fi
+
+  if command -v sysctl >/dev/null 2>&1; then
+    log "- qdisc: $(sysctl -n net.core.default_qdisc 2>/dev/null || printf '%s' unknown)"
+    log "- congestion: $(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || printf '%s' unknown)"
+  fi
+}
+
+render_template() {
+  local src="$1"
+  local dst="$2"
+
+  awk \
+    -v SERVER_ADDRESS="$SERVER_ADDRESS" \
+    -v SERVER_PORT="$SERVER_PORT" \
+    -v REALITY_DEST="$REALITY_DEST" \
+    -v REALITY_SERVER_NAME="$REALITY_SERVER_NAME" \
+    -v CLIENT_FINGERPRINT="$CLIENT_FINGERPRINT" \
+    -v UUID="$UUID" \
+    -v REALITY_PRIVATE_KEY="$REALITY_PRIVATE_KEY" \
+    -v REALITY_PUBLIC_KEY="$REALITY_PUBLIC_KEY" \
+    -v REALITY_SHORT_ID="$REALITY_SHORT_ID" \
+    -v XRAY_LOGLEVEL="$XRAY_LOGLEVEL" \
+    '{
+      gsub(/__SERVER_ADDRESS__/, SERVER_ADDRESS)
+      gsub(/__SERVER_PORT__/, SERVER_PORT)
+      gsub(/__REALITY_DEST__/, REALITY_DEST)
+      gsub(/__REALITY_SERVER_NAME__/, REALITY_SERVER_NAME)
+      gsub(/__CLIENT_FINGERPRINT__/, CLIENT_FINGERPRINT)
+      gsub(/__UUID__/, UUID)
+      gsub(/__REALITY_PRIVATE_KEY__/, REALITY_PRIVATE_KEY)
+      gsub(/__REALITY_PUBLIC_KEY__/, REALITY_PUBLIC_KEY)
+      gsub(/__REALITY_SHORT_ID__/, REALITY_SHORT_ID)
+      gsub(/__XRAY_LOGLEVEL__/, XRAY_LOGLEVEL)
+      print
+    }' "$src" >"$dst"
+}
+
+install_xray() {
+  require_root
+  ensure_dirs
+  install_packages
+  apply_sysctl_tuning
+  bash -c "$(curl -L "$INSTALL_SCRIPT_URL")" @ install
+  log "install complete"
+}
+
+deploy_xray() {
+  require_root
+  ensure_dirs
+  load_config
+  validate_config_inputs
+  require_xray
+  check_reality_target
+
+  generate_uuid_if_missing
+  generate_keys_if_missing
+  generate_short_id_if_missing
+  save_runtime_env
+
+  mkdir -p "$XRAY_CONFIG_DIR"
+
+  render_template "$TEMPLATE_DIR/config.server.json.tpl" "$STATE_DIR/config.server.json"
+  render_template "$TEMPLATE_DIR/client.vless.uri.tpl" "$GENERATED_DIR/client.vless.txt"
+  render_template "$TEMPLATE_DIR/client.mihomo.yaml.tpl" "$GENERATED_DIR/client.mihomo.yaml"
+
+  "$(xray_bin)" run -test -config "$STATE_DIR/config.server.json"
+  local backup_path
+  backup_path="$(backup_current_config)"
+  install -m 600 "$STATE_DIR/config.server.json" "$XRAY_CONFIG_FILE"
+
+  systemctl enable xray >/dev/null 2>&1 || true
+  restart_with_rollback "$backup_path"
+
+  log "deploy complete"
+  print_deploy_health
+  log "server config: $XRAY_CONFIG_FILE"
+  log "vless link: $GENERATED_DIR/client.vless.txt"
+  log "mihomo config: $GENERATED_DIR/client.mihomo.yaml"
+}
+
+restart_xray() {
+  require_root
+  systemctl restart xray
+  log "xray restarted"
+}
+
+status_xray() {
+  log "root dir: $ROOT_DIR"
+  log "config: $XRAY_CONFIG_FILE"
+  log "runtime: $RUNTIME_ENV"
+  log "generated vless: $GENERATED_DIR/client.vless.txt"
+  log "generated mihomo: $GENERATED_DIR/client.mihomo.yaml"
+  echo
+
+  if command -v sysctl >/dev/null 2>&1; then
+    sysctl net.core.default_qdisc 2>/dev/null || true
+    sysctl net.ipv4.tcp_congestion_control 2>/dev/null || true
+    echo
+  fi
+
+  if command -v ss >/dev/null 2>&1; then
+    ss -lntp 2>/dev/null | grep ':443' || true
+    echo
+  fi
+
+  systemctl status xray --no-pager || true
+}
+
+show_client() {
+  ensure_dirs
+
+  [[ -f "$GENERATED_DIR/client.vless.txt" ]] || die "generated/client.vless.txt not found, run deploy first"
+  [[ -f "$GENERATED_DIR/client.mihomo.yaml" ]] || die "generated/client.mihomo.yaml not found, run deploy first"
+
+  log "vless:"
+  cat "$GENERATED_DIR/client.vless.txt"
+  echo
+  log "mihomo:"
+  cat "$GENERATED_DIR/client.mihomo.yaml"
+}
+
+main() {
+  local command="${1:-}"
+
+  case "$command" in
+    install)
+      install_xray
+      ;;
+    deploy)
+      deploy_xray
+      ;;
+    restart)
+      restart_xray
+      ;;
+    status)
+      status_xray
+      ;;
+    show-client)
+      show_client
+      ;;
+    *)
+      usage
+      exit 1
+      ;;
+  esac
+}
+
+main "$@"

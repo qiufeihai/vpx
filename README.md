@@ -1,0 +1,117 @@
+# 自用高性能 Xray 极简脚本包
+
+这是一套只面向单机单用户的极简部署包，默认协议固定为：
+
+- `VLESS + TCP(raw) + REALITY + xtls-rprx-vision`
+
+不包含：
+
+- `WS`
+- `gRPC`
+- `XHTTP`
+- 面板
+- 多用户
+- CDN 反代链路
+- 域名和证书依赖
+
+## 目标系统
+
+- `Ubuntu 24.04`：推荐
+- `Rocky 9`：兼容支持
+
+说明：
+
+- 两个系统都支持安装、部署、重启、查看状态。
+- 性能优化优先面向 `Ubuntu 24.04`。
+- `Rocky 9` 默认内核和网络栈不一定达到相同性能上限。
+
+## 前置条件
+
+- 一台具备公网 IPv4 的 Linux VPS
+- `443/tcp` 已放行
+- 具备 root 权限
+- 目标客户端支持 `REALITY + Vision`
+- 桌面端使用 `Mihomo / Clash.Meta`
+- iOS 使用 `Shadowrocket`
+
+## 使用方式
+
+最短上线清单：
+
+```bash
+cp .env.example .env.local
+```
+
+编辑 `.env.local`，至少确认这三个字段：
+
+- `SERVER_ADDRESS`
+- `REALITY_DEST`
+- `REALITY_SERVER_NAME`
+
+```bash
+sudo ./scripts/xray-selfhost install
+sudo ./scripts/xray-selfhost deploy
+./scripts/xray-selfhost show-client
+```
+
+部署特性：
+
+- 部署前会预检查 `REALITY_DEST` 与 `REALITY_SERVER_NAME` 是否可连通且证书匹配。
+- 部署时会先备份现有 `/usr/local/etc/xray/config.json`。
+- 新配置重启失败时会自动回滚到上一个配置。
+- 部署成功后会直接输出服务状态、`443` 监听和当前拥塞控制信息。
+
+## 命令
+
+```bash
+./scripts/xray-selfhost install
+./scripts/xray-selfhost deploy
+./scripts/xray-selfhost restart
+./scripts/xray-selfhost status
+./scripts/xray-selfhost show-client
+```
+
+## 产物
+
+- `generated/client.vless.txt`
+- `generated/client.mihomo.yaml`
+- `state/runtime.env`
+
+说明：
+
+- `generated/client.vless.txt` 可直接导入 `Shadowrocket`，也可供其他支持 `REALITY + Vision` 的客户端使用。
+- `generated/client.mihomo.yaml` 用于 `Mihomo / Clash.Meta`。
+- `state/runtime.env` 保存自动生成的 `UUID`、密钥和 `shortId`。
+
+## 配置字段
+
+- `SERVER_ADDRESS`：服务器公网 IP 或域名
+- `SERVER_PORT`：默认 `443`
+- `REALITY_DEST`：伪装目标，格式如 `www.microsoft.com:443`
+- `REALITY_SERVER_NAME`：对应 `SNI`
+- `CLIENT_FINGERPRINT`：默认 `chrome`
+- `UUID`：可留空，部署时自动生成
+- `REALITY_PRIVATE_KEY`：可留空，部署时自动生成
+- `REALITY_PUBLIC_KEY`：可留空，部署时自动生成
+- `REALITY_SHORT_ID`：可留空，部署时自动生成
+- `XRAY_LOGLEVEL`：默认 `warning`
+
+## 验证
+
+如果你要手工复查，可再执行：
+
+```bash
+sudo ./scripts/xray-selfhost status
+sudo systemctl status xray --no-pager
+sudo ss -lntp | grep ':443'
+```
+
+客户端导入验证：
+
+- iOS：导入 `generated/client.vless.txt`
+- macOS / Windows：导入 `generated/client.mihomo.yaml`
+
+## 生产注意事项
+
+- `install` 会按能力探测后尝试启用 `fq + bbr`，内核不支持时会跳过，不再因为调优失败打断安装。
+- `deploy` 通过 `xray run -test` 只代表配置语法通过，不代表你的目标网络环境一定可用；首次上线仍建议你在控制台保持会话，不要盲切。

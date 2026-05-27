@@ -1,0 +1,1 @@
+vless://__UUID__@__SERVER_ADDRESS__:__SERVER_PORT__?encryption=none&flow=xtls-rprx-vision&security=reality&sni=__REALITY_SERVER_NAME__&fp=__CLIENT_FINGERPRINT__&pbk=__REALITY_PUBLIC_KEY__&sid=__REALITY_SHORT_ID__&type=tcp#xray-selfhost
