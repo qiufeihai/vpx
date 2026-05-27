@@ -77,9 +77,9 @@ install_packages() {
   if [[ "$PACKAGE_MANAGER" == "apt" ]]; then
     export DEBIAN_FRONTEND=noninteractive
     apt-get update
-    apt-get install -y curl openssl ca-certificates iproute2 procps
+    apt-get install -y curl openssl ca-certificates iproute2 procps unzip
   else
-    dnf install -y curl openssl ca-certificates iproute procps-ng
+    dnf install -y curl openssl ca-certificates iproute procps-ng unzip
   fi
 }
 
@@ -341,12 +341,21 @@ render_template() {
 }
 
 install_xray() {
+  local install_script
+
   require_root
   ensure_dirs
   install_packages
   apply_sysctl_tuning
-  bash -c "$(curl -L "$INSTALL_SCRIPT_URL")" @ install
+
+  install_script="$(mktemp)"
+  curl -fsSL "$INSTALL_SCRIPT_URL" -o "$install_script"
+  bash "$install_script" install
+  rm -f "$install_script"
+
+  require_xray
   log "install complete"
+  log "xray version: $("$(xray_bin)" -version | awk 'NR==1 {print $2}')"
 }
 
 deploy_xray() {

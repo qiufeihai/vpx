@@ -114,4 +114,5 @@ sudo ss -lntp | grep ':443'
 ## 生产注意事项
 
 - `install` 会按能力探测后尝试启用 `fq + bbr`，内核不支持时会跳过，不再因为调优失败打断安装。
+- 在 `Rocky 9` 上如果看到 `skip bbr tuning: bbr not available on this kernel`，这只是警告，不代表 `Xray` 安装失败。
 - `deploy` 通过 `xray run -test` 只代表配置语法通过，不代表你的目标网络环境一定可用；首次上线仍建议你在控制台保持会话，不要盲切。
