@@ -14,11 +14,5 @@ proxies:
       public-key: __REALITY_PUBLIC_KEY__
       short-id: __REALITY_SHORT_ID__
 
-proxy-groups:
-  - name: PROXY
-    type: select
-    proxies:
-      - vless-reality
-
 rules:
-  - MATCH,PROXY
+  - MATCH,vless-reality
